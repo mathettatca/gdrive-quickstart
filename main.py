@@ -1,102 +1,159 @@
-from dataclasses import dataclass, fields
+import asyncio
 import logging
-from google.oauth2 import service_account
+from dataclasses import dataclass
+from typing import List, Dict, Optional
+
 from googleapiclient.discovery import build
-from dotenv import dotenv_values
-from googleapiclient.discovery import Resource
+from googleapiclient.http import MediaIoBaseDownload
+from google.oauth2 import service_account
+
+from tqdm import tqdm
 
 
-from downloader import download_file_from_drive
-
-config = dotenv_values(".env")
-
+# =========================
+# CONFIG
+# =========================
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+SERVICE_ACCOUNT_FILE = "service_account.json"
 
-# cấu hình logger
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# =========================
+# MODEL
+# =========================
 @dataclass
 class FileModel:
-    id:str
-    name:str
+    id: str
+    name: str
 
-    @classmethod
-    def to_model(cls, json: dict) -> "FileModel":
-        logger.info("Start parsing dict to %s", cls.__name__)
-        logger.info("Input json: %s", json)
-
-        # lấy danh sách field
-        field_names = {f.name for f in fields(cls)}
-        logger.info("Model fields: %s", field_names)
-
-        filtered = {}
-
-        for k, v in json.items():
-            logger.info("Processing key=%s, value=%s", k, v)
-
-            if k in field_names:
-                logger.info("Accepted field: %s", k)
-                filtered[k] = v
-            else:
-                logger.info("Ignored field: %s", k)
-
-        logger.info("Filtered data: %s", filtered)
-
-        try:
-            instance = cls(**filtered)
-            logger.info("Successfully created %s instance", cls.__name__)
-            return instance
-        except Exception as e:
-            logger.exception("Failed to create %s from data: %s", cls.__name__, filtered)
-            raise
+    @staticmethod
+    def to_model(data: dict) -> "FileModel":
+        return FileModel(
+            id=data["id"],
+            name=data["name"]
+        )
 
 
-
-def get_service() -> Resource:
-    logger.info("Initializing Google Drive service...")
-    creds = service_account.Credentials.from_service_account_file(
-        "credentials.json",
+# =========================
+# GOOGLE DRIVE SERVICE
+# =========================
+def get_service():
+    credentials = service_account.Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE,
         scopes=SCOPES
     )
-    service = build("drive", "v3", credentials=creds)
-    logger.info("Google Drive service initialized")
-    return service
+    return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 
-def list_files_in_folder(service, folder_id):
-    logger.info(f"Listing files in folder: {folder_id}")
+# =========================
+# GET FILE SIZE
+# =========================
+def get_file_size(service, file_id: str) -> int:
+    meta = service.files().get(fileId=file_id, fields="size").execute()
+    return int(meta.get("size", 0))
 
-    query = f"'{folder_id}' in parents"
-    results = service.files().list(
-        q=query,
-        fields="files(id, name, mimeType)"
-    ).execute()
 
-    files = results.get("files", [])
-    response:list[FileModel] = []
-    for f in files:
-        logger.info(f"{f}")
-        if f["mimeType"] == 'application/vnd.google-apps.folder':
-            continue
-        response.append(FileModel.to_model(f))
-    logger.info(f"Found {len(files)} files")
+# =========================
+# BLOCKING DOWNLOAD + TQDM
+# =========================
+def download_file_stream(service, file: FileModel, position: int = 0) -> str:
+    request = service.files().get_media(fileId=file.id)
+    file_size = get_file_size(service, file.id)
 
-    return response
+    with open(file.name, "wb") as f:
+        downloader = MediaIoBaseDownload(f, request)
 
-def main():
-    logger.info("Program started")
+        with tqdm(
+            total=file_size,
+            unit="B",
+            unit_scale=True,
+            desc=file.name,
+            position=position,
+            leave=True
+        ) as pbar:
+
+            done = False
+            last_progress = 0
+
+            while not done:
+                status, done = downloader.next_chunk()
+
+                if status:
+                    current = int(status.progress() * file_size)
+                    delta = current - last_progress
+                    pbar.update(delta)
+                    last_progress = current
+
+    logger.info(f"Completed: {file.name}")
+    return file.name
+
+
+# =========================
+# ASYNC WRAPPER
+# =========================
+async def download_file_async(service, file: FileModel, position: int) -> Optional[str]:
+    loop = asyncio.get_running_loop()
+
+    try:
+        return await loop.run_in_executor(
+            None,
+            download_file_stream,
+            service,
+            file,
+            position
+        )
+    except Exception as e:
+        logger.error(f"Failed file {file.id}: {e}")
+        return None
+
+
+# =========================
+# DOWNLOAD MULTIPLE FILES
+# =========================
+async def download_all(
+    service,
+    files: List[FileModel],
+    max_concurrent: int = 3
+) -> Dict[str, str]:
+
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def sem_task(file: FileModel, pos: int):
+        async with semaphore:
+            return await download_file_async(service, file, pos)
+
+    tasks = [
+        sem_task(f, i) for i, f in enumerate(files)
+    ]
+
+    results = await asyncio.gather(*tasks)
+
+    return {
+        f.id: result
+        for f, result in zip(files, results)
+        if result is not None
+    }
+
+
+# =========================
+# MAIN
+# =========================
+if __name__ == "__main__":
+
+    files_list = [
+        {"id": "1LS3rnSCEmLMi4yEXj8k15xIpcErFMHMW", "name": "detail_Vietnam_import_hs63.xlsx"},
+        {"id": "13sGoDLJ5uUbPLuF-jGGyfe380fdi1HCP", "name": "FINALIZED_import_54.xlsx"},
+        {"id": "1F07Ct3ohjB9Td5nXGR6r6m9WKEJ-3c5e", "name": "FINALIZED_export_54.xlsx"},
+    ]
+
+    files_models = [FileModel.to_model(f) for f in files_list]
 
     service = get_service()
-    folder_id = config["FOLDER_ID"]
 
-    files : list[FileModel] = list_files_in_folder(service, folder_id)
-    status :bool = download_file_from_drive(service,files)
-    
+    results = asyncio.run(
+        download_all(service, files_models, max_concurrent=3)
+    )
 
-
-if __name__ == "__main__":
-    main()
+    logger.info(f"Downloaded files: {results}")
