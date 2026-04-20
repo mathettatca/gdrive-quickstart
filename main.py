@@ -1,9 +1,12 @@
+from dataclasses import dataclass, fields
 import logging
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from dotenv import dotenv_values
-import io
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.discovery import Resource
+
+
+from downloader import download_file_from_drive
 
 config = dotenv_values(".env")
 
@@ -16,8 +19,44 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@dataclass
+class FileModel:
+    id:str
+    name:str
 
-def get_service():
+    @classmethod
+    def to_model(cls, json: dict) -> "FileModel":
+        logger.info("Start parsing dict to %s", cls.__name__)
+        logger.info("Input json: %s", json)
+
+        # lấy danh sách field
+        field_names = {f.name for f in fields(cls)}
+        logger.info("Model fields: %s", field_names)
+
+        filtered = {}
+
+        for k, v in json.items():
+            logger.info("Processing key=%s, value=%s", k, v)
+
+            if k in field_names:
+                logger.info("Accepted field: %s", k)
+                filtered[k] = v
+            else:
+                logger.info("Ignored field: %s", k)
+
+        logger.info("Filtered data: %s", filtered)
+
+        try:
+            instance = cls(**filtered)
+            logger.info("Successfully created %s instance", cls.__name__)
+            return instance
+        except Exception as e:
+            logger.exception("Failed to create %s from data: %s", cls.__name__, filtered)
+            raise
+
+
+
+def get_service() -> Resource:
     logger.info("Initializing Google Drive service...")
     creds = service_account.Credentials.from_service_account_file(
         "credentials.json",
@@ -38,11 +77,15 @@ def list_files_in_folder(service, folder_id):
     ).execute()
 
     files = results.get("files", [])
+    response:list[FileModel] = []
+    for f in files:
+        logger.info(f"{f}")
+        if f["mimeType"] == 'application/vnd.google-apps.folder':
+            continue
+        response.append(FileModel.to_model(f))
     logger.info(f"Found {len(files)} files")
 
-    return files
-
-
+    return response
 
 def main():
     logger.info("Program started")
@@ -50,12 +93,9 @@ def main():
     service = get_service()
     folder_id = config["FOLDER_ID"]
 
-    files = list_files_in_folder(service, folder_id)
-
-    for f in files:
-        logger.info(f"File found: {f['name']} ({f['id']})")
-
-    logger.info("Program finished")
+    files : list[FileModel] = list_files_in_folder(service, folder_id)
+    status :bool = download_file_from_drive(service,files)
+    
 
 
 if __name__ == "__main__":
