@@ -6,7 +6,7 @@ from dotenv import dotenv_values
 from googleapiclient.discovery import Resource
 
 
-from downloader import download_file_from_drive
+# from downloader import download_file_from_drive
 
 config = dotenv_values(".env")
 
@@ -26,29 +26,18 @@ class FileModel:
 
     @classmethod
     def to_model(cls, json: dict) -> "FileModel":
-        logger.info("Start parsing dict to %s", cls.__name__)
-        logger.info("Input json: %s", json)
-
+        
         # lấy danh sách field
         field_names = {f.name for f in fields(cls)}
-        logger.info("Model fields: %s", field_names)
-
         filtered = {}
 
         for k, v in json.items():
-            logger.info("Processing key=%s, value=%s", k, v)
 
             if k in field_names:
-                logger.info("Accepted field: %s", k)
                 filtered[k] = v
-            else:
-                logger.info("Ignored field: %s", k)
-
-        logger.info("Filtered data: %s", filtered)
 
         try:
             instance = cls(**filtered)
-            logger.info("Successfully created %s instance", cls.__name__)
             return instance
         except Exception as e:
             logger.exception("Failed to create %s from data: %s", cls.__name__, filtered)
@@ -67,36 +56,36 @@ def get_service() -> Resource:
     return service
 
 
-def list_files_in_folder(service, folder_id):
-    logger.info(f"Listing files in folder: {folder_id}")
+# def list_files_in_folder(service, folder_id):
+#     logger.info(f"Listing files in folder: {folder_id}")
 
-    query = f"'{folder_id}' in parents"
-    results = service.files().list(
-        q=query,
-        fields="files(id, name, mimeType)"
-    ).execute()
+#     query = f"'{folder_id}' in parents"
+#     results = service.files().list(
+#         q=query,
+#         fields="files(id, name, mimeType)"
+#     ).execute()
 
-    files = results.get("files", [])
-    response:list[FileModel] = []
-    for f in files:
-        logger.info(f"{f}")
-        if f["mimeType"] == 'application/vnd.google-apps.folder':
-            continue
-        response.append(FileModel.to_model(f))
-    logger.info(f"Found {len(files)} files")
+#     files = results.get("files", [])
+#     response:list[FileModel] = []
+#     for f in files:
+#         logger.info(f"{f}")
+#         if f["mimeType"] == 'application/vnd.google-apps.folder':
+#             continue
+#         response.append(FileModel.to_model(f))
+#     logger.info(f"Found {len(files)} files")
 
-    return response
+#     return response
 
-def main():
-    logger.info("Program started")
+# def main():
+#     logger.info("Program started")
 
-    service = get_service()
-    folder_id = config["FOLDER_ID"]
+#     service = get_service()
+#     folder_id = config["FOLDER_ID"]
 
-    files : list[FileModel] = list_files_in_folder(service, folder_id)
-    status :bool = download_file_from_drive(service,files)
+#     files : list[FileModel] = list_files_in_folder(service, folder_id)
+#     status :bool = download_file_from_drive(service,files)
     
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
