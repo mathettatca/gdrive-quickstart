@@ -7,6 +7,8 @@ from typing import List, Dict, Optional
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
+from pprint import pformat
+
 
 from tqdm import tqdm
 
@@ -110,7 +112,20 @@ async def download_file_async(service, file: FileModel, position: int) -> Option
     except Exception as e:
         logger.error(f"Failed file {file.id}: {e}")
         return None
+    
+def list_files_in_folder(service, folder_id):
+    logger.info(f"Listing files in folder: {folder_id}")
 
+    query = f"'{folder_id}' in parents"
+    results = service.files().list(
+        q=query,
+        fields="files(id, name,size,fileExtension)"
+    ).execute()
+    logger.info(pformat(results))
+    files = results.get("files", [])
+    logger.info(f"Found {len(files)} files")
+
+    return files
 
 # =========================
 # DOWNLOAD MULTIPLE FILES
@@ -145,18 +160,20 @@ async def download_all(
 # =========================
 if __name__ == "__main__":
 
-    files_list = [
-        {"id": "1LS3rnSCEmLMi4yEXj8k15xIpcErFMHMW", "name": "detail_Vietnam_import_hs63.xlsx"},
-        {"id": "13sGoDLJ5uUbPLuF-jGGyfe380fdi1HCP", "name": "FINALIZED_import_54.xlsx"},
-        {"id": "1F07Ct3ohjB9Td5nXGR6r6m9WKEJ-3c5e", "name": "FINALIZED_export_54.xlsx"},
-    ]
+    # files_list = [
+    #     {"id": "1LS3rnSCEmLMi4yEXj8k15xIpcErFMHMW", "name": "detail_Vietnam_import_hs63.xlsx"},
+    #     {"id": "13sGoDLJ5uUbPLuF-jGGyfe380fdi1HCP", "name": "FINALIZED_import_54.xlsx"},
+    #     {"id": "1F07Ct3ohjB9Td5nXGR6r6m9WKEJ-3c5e", "name": "FINALIZED_export_54.xlsx"},
+    # ]
 
-    files_models = [FileModel.to_model(f) for f in files_list]
+    # files_models = [FileModel.to_model(f) for f in files_list]
 
     service = get_service()
 
-    results = asyncio.run(
-        download_all(service, files_models, max_concurrent=3)
-    )
+    # results = asyncio.run(
+    #     download_all(service, files_models, max_concurrent=3)
+    # )
 
-    logger.info(f"Downloaded files: {results}")
+    # logger.info(f"Downloaded files: {results}")
+
+    list_files_in_folder(service=service,folder_id='1s65CZOPLT-WMGxbxMTKXl72aIBf14Kqn')
